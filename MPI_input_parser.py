@@ -5,8 +5,14 @@ import numpy as np
 import h5py
 from tqdm import trange
 import sys
+from enum import Enum
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
+
+class OutFrameFilterEnum(Enum):
+    NOT_FILTER = 1 # 기존처럼 상관없이 데이터 처리
+    REMOVE_DATA = 2 # 이미지 밖으로 벗어나는 경우 해당 프레임 데이터 전체 제거
+    TO_ZERO = 3 # 이미지 밖으로 벗어나는 경우 Joint3D 데이터를 0으로 변경?
 
 MPI_ROOT_PATH = 'D:/Test_Models/PoseEstim/mpi_inf_3dhp_hkkim_dataset/'
 CAMERA_NUM = 5
@@ -20,6 +26,25 @@ HEATMAP_RESIZE_WIDTH = 47
 HEATMAP_RESIZE_HEIGHT = 47
 HEATMAP_SIGMA = 1
 NUM_JOINT = 28
+OUTFRAME_FILTER_OPTION = OutFrameFilterEnum.REMOVE_DATA
+
+
+def OutOfFrameData(img_width, img_height, joint2D):
+    # Joint2D Data 중, 이미지 바깥의 데이터가 포함된 frame index들을 찾아서 반환
+    joint2D_heights_coord = joint2D[:,0::2]
+    joint2D_widths_coord = joint2D[:,1::2]
+
+    outframe_heights = (joint2D_heights_coord < 0) | (joint2D_heights_coord > img_height)
+    outframe_widths = (joint2D_widths_coord < 0) | (joint2D_widths_coord > img_width)
+
+    outframe_data = outframe_heights | outframe_widths
+    outframe_data = np.sum(outframe_data,axis=1)
+
+    outframe_indices = np.where(outframe_data > 0)
+
+    return outframe_indices[0]
+
+
 
 hdf5_dataset = h5py.File('S{0}_Seq{1}_Camera{2}.h5'.format(PERSON_NUM,SEQUENCE_NUM,CAMERA_NUM), 'w')
 hdf5_dataset.attrs.create(name="image_width", data=IMG_RESIZE_WIDTH)
@@ -43,7 +68,13 @@ annot3_univ = annotMat['univ_annot3'] # Normalized 3D 좌표
 joint3D = annot3[CAMERA_NUM][0] # frame x 84(3*28)
 joint2D = annot2[CAMERA_NUM][0] # frame x 56(2*28)
 
+# numFrame을 계산하기 전 frame에서 벗어난 인덱스들 계산
+outframe_indices = OutOfFrameData(IMG_SOURCE_WIDTH, IMG_SOURCE_HEIGHT, joint2D)
+
 numFrame = annot3[CAMERA_NUM][0].shape[0]
+
+if OUTFRAME_FILTER_OPTION == OutFrameFilterEnum.REMOVE_DATA:
+    numFrame = numFrame - outframe_indices.shape[0]
 
 hdf5_images = hdf5_dataset.create_dataset(name='images',
                              shape=(numFrame,),
@@ -100,17 +131,24 @@ aviClip = cv2.VideoCapture(aviClipPath)
 tr = trange(numFrame, desc='Creating HDF5 dataset', file=sys.stdout)
 
 # 각 프레임별로 데이터 저장 진행
+index = 0
 for i in tr:
     # 동영상 저장
-    ret, frame = aviClip.read()
+    ret, frame = aviClip.read() # frame read는 순차적이기 때문에 pass하면 안됨
+    if i == 545:
+        k=1
+
+    if i in outframe_indices:
+        continue
+
     frame = cv2.resize(frame,dsize=(IMG_RESIZE_HEIGHT,IMG_RESIZE_WIDTH))
-    hdf5_images[i] = frame.reshape(-1)
+    hdf5_images[index] = frame.reshape(-1)
 
     # Joint 3D 저장
-    hdf5_3d_joint[i] = joint3D[i,:].copy()
+    hdf5_3d_joint[index] = joint3D[i,:].copy()
 
     # Joint 2D 저장
-    hdf5_2d_joint[i] = joint2D[i,:].copy()
+    hdf5_2d_joint[index] = joint2D[i,:].copy()
 
     # Heatmap 생성 및 저장
     stacked_heatmap = np.empty(())
@@ -122,8 +160,10 @@ for i in tr:
                                                 IMG_SOURCE_WIDTH, IMG_SOURCE_HEIGHT)
         per_joint_heatmap = per_joint_heatmap*255
         heatmap = per_joint_heatmap.astype(np.uint8)
-        hdf5_2d_joint_heatmap[i,jointIndex] = heatmap
+        hdf5_2d_joint_heatmap[index,jointIndex] = heatmap
         jointIndex = jointIndex+1
+
+    index = index+1
 
 hdf5_dataset.close()
 aviClip.release()
