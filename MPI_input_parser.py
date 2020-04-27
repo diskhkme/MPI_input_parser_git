@@ -9,7 +9,7 @@ from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
 
 MPI_ROOT_PATH = 'D:/Test_Models/PoseEstim/mpi_inf_3dhp_hkkim_dataset/'
-CAMERA_NUM = 0
+CAMERA_NUM = 5
 PERSON_NUM = 1 # S1, S2
 SEQUENCE_NUM = 1 # Seq1, Seq2
 IMG_SOURCE_WIDTH = 2048
